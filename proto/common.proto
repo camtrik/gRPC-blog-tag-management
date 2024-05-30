@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 package proto;
+import "google/protobuf/any.proto";
 option go_package = "github.com/camtrik/gRPC-blog-tag-management/proto";
 
 message Pager {
@@ -9,3 +10,8 @@ message Pager {
     int64 total_rows = 3;
 }
 
+message Error {
+    int32 code = 1;
+    string message = 2;
+    google.protobuf.Any details = 3;
+}

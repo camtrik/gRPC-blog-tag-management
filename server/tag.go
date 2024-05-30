@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/camtrik/gRPC-blog-tag-management/pkg/bapi"
+	"github.com/camtrik/gRPC-blog-tag-management/pkg/errcode"
 	pb "github.com/camtrik/gRPC-blog-tag-management/proto"
 )
 
@@ -20,13 +21,14 @@ func (t *TagServer) GetTagList(ctx context.Context, r *pb.GetTagListRequest) (*p
 	api := bapi.NewAPI("http://localhost:8000")
 	body, err := api.GetTagList(ctx, r.GetName())
 	if err != nil {
-		return nil, err
+		return nil, errcode.TogRPCError(errcode.ErrorGetTagListFail)
 	}
 
 	tagList := pb.GetTagListReply{}
+	// body -> tagList
 	err = json.Unmarshal(body, &tagList)
 	if err != nil {
-		return nil, err
+		return nil, errcode.TogRPCError(errcode.Fail)
 	}
 	return &tagList, nil
 }
