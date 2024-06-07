@@ -12,7 +12,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	clientConn, _ := GetClientConn("localhost:8080", []grpc.DialOption{grpc.WithBlock()})
+	clientConn, _ := GetClientConn("localhost:8080", nil)
 	defer clientConn.Close()
 
 	targetServiceClient := pb.NewTagServiceClient(clientConn)
