@@ -1,44 +1,62 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net"
 	"net/http"
+	"strings"
 
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
 	pb "github.com/camtrik/gRPC-blog-tag-management/proto"
 	"github.com/camtrik/gRPC-blog-tag-management/server"
-	"github.com/soheilhy/cmux"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 )
 
 var port string
-var grpcPort string
-var httpPort string
 
 func init() {
-	flag.StringVar(&port, "port", "8080", "API server port")
-	flag.StringVar(&grpcPort, "grpc_port", "7080", "gRPC port")
-	flag.StringVar(&httpPort, "http_port", "9080", "HTTP port")
+	flag.StringVar(&port, "port", "8080", "server port")
 	flag.Parse()
+}
+
+func grpcHandlerFunc(grpcServer *grpc.Server, otherHandler http.Handler) http.Handler {
+	return h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// if http version is 2 and connet type is grpc
+		if r.ProtoMajor == 2 && strings.Contains(r.Header.Get("Content-Type"), "application/grpc") {
+			grpcServer.ServeHTTP(w, r)
+		} else {
+			otherHandler.ServeHTTP(w, r)
+		}
+	}), &http2.Server{})
+}
+
+func RunServer(port string) error {
+	httpMux := RunHttpServer()
+	grpcS := RunGrpcServer()
+	gatewayMux := RunGrpcGatewayServer()
+
+	httpMux.Handle("/", gatewayMux)
+
+	return http.ListenAndServe(":"+port, grpcHandlerFunc(grpcS, httpMux))
 }
 
 func RunTCPServer(port string) (net.Listener, error) {
 	return net.Listen("tcp", ":"+port)
 }
 
-func RunHttpServer(port string) *http.Server {
+func RunHttpServer() *http.ServeMux {
 	serveMux := http.NewServeMux()
 	serveMux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`pong`))
 	})
 
-	return &http.Server{
-		Addr:    ":" + port,
-		Handler: serveMux,
-	}
+	return serveMux
 }
 
 func RunGrpcServer() *grpc.Server {
@@ -49,44 +67,19 @@ func RunGrpcServer() *grpc.Server {
 	return s
 }
 
+func RunGrpcGatewayServer() *runtime.ServeMux {
+	endpoint := "0.0.0.0:" + port
+	gwmux := runtime.NewServeMux()
+	dopts := []grpc.DialOption{grpc.WithInsecure()}
+	_ = pb.RegisterTagServiceHandlerFromEndpoint(context.Background(), gwmux, endpoint, dopts)
+
+	return gwmux
+}
+
 func main() {
-	l, err := RunTCPServer(port)
+	err := RunServer(port)
 	if err != nil {
 		log.Fatalf("Run TCP server error: %v", err)
 	}
 
-	m := cmux.New(l)
-	grpcL := m.MatchWithWriters(cmux.HTTP2MatchHeaderFieldPrefixSendSettings("content-type", "application/grpc"))
-	httpL := m.Match(cmux.HTTP1Fast())
-
-	grpcS := RunGrpcServer()
-	httpS := RunHttpServer(port)
-	go grpcS.Serve(grpcL)
-	go httpS.Serve(httpL)
-
-	err = m.Serve()
-	if err != nil {
-		log.Fatalf("Run server error: %v", err)
-
-	}
-
-	// errs := make(chan error)
-	// go func() {
-	// 	err := RunHttpServer(httpPort)
-	// 	if err != nil {
-	// 		errs <- err
-	// 	}
-	// }()
-
-	// go func() {
-	// 	err := RunGrpcServer(grpcPort)
-	// 	if err != nil {
-	// 		errs <- err
-	// 	}
-	// }()
-
-	// select {
-	// case err := <-errs:
-	// 	log.Fatalf("error: %v", err)
-	// }
 }
