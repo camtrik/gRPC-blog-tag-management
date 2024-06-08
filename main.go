@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
 	"net"
@@ -11,7 +12,9 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 
 	pb "github.com/camtrik/gRPC-blog-tag-management/proto"
 	"github.com/camtrik/gRPC-blog-tag-management/server"
@@ -20,9 +23,22 @@ import (
 
 var port string
 
+type httpError struct {
+	Code    int32  `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
 func init() {
 	flag.StringVar(&port, "port", "8080", "server port")
 	flag.Parse()
+}
+
+func main() {
+	err := RunServer(port)
+	if err != nil {
+		log.Fatalf("Run TCP server error: %v", err)
+	}
+
 }
 
 func grpcHandlerFunc(grpcServer *grpc.Server, otherHandler http.Handler) http.Handler {
@@ -67,19 +83,35 @@ func RunGrpcServer() *grpc.Server {
 	return s
 }
 
+// Reverse proxy or gRPC, convert HTTP request to gRPC request, then convvert gRPC response to HTTP response to client side
 func RunGrpcGatewayServer() *runtime.ServeMux {
 	endpoint := "0.0.0.0:" + port
-	gwmux := runtime.NewServeMux()
+	gwmux := runtime.NewServeMux(
+		runtime.WithErrorHandler(grpcGataewayError),
+	)
 	dopts := []grpc.DialOption{grpc.WithInsecure()}
 	_ = pb.RegisterTagServiceHandlerFromEndpoint(context.Background(), gwmux, endpoint, dopts)
 
 	return gwmux
 }
 
-func main() {
-	err := RunServer(port)
-	if err != nil {
-		log.Fatalf("Run TCP server error: %v", err)
+func grpcGataewayError(ctx context.Context, _ *runtime.ServeMux, marshaler runtime.Marshaler, w http.ResponseWriter, _ *http.Request, err error) {
+	s, ok := status.FromError(err)
+	if !ok {
+		s = status.New(codes.Unknown, err.Error())
 	}
 
+	httpError := httpError{Code: int32(s.Code()), Message: s.Message()}
+	details := s.Details()
+	for _, detail := range details {
+		if v, ok := detail.(*pb.Error); ok {
+			httpError.Code = v.Code
+			httpError.Message = v.Message
+		}
+	}
+
+	resp, _ := json.Marshal(httpError)
+	w.Header().Set("Content-Type", marshaler.ContentType(nil))
+	w.WriteHeader(runtime.HTTPStatusFromCode(s.Code()))
+	_, _ = w.Write(resp)
 }
